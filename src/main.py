@@ -2,35 +2,58 @@
 import cv2
 import mediapipe as mp
 import csv
+import uuid
 from pathlib import Path
+from datetime import datetime
 
-# Where our landmark data will be saved
-OUTPUT_FILE = Path("dataset/landmarks/test_landmarks.csv")
-OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+# ---------------------------------
+# SIGNCADENCE - HAND DATA COLLECTION
+# ---------------------------------
 
-# Prepare MediaPipe
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MODEL_PATH = PROJECT_ROOT / "models" / "hand_landmarker.task"
+DATASET_FOLDER = PROJECT_ROOT / "dataset" / "landmarks"
+CSV_FILE = DATASET_FOLDER / "signcadence_landmarks.csv"
+
+DATASET_FOLDER.mkdir(parents=True, exist_ok=True)
+
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(f"MediaPipe model not found: {MODEL_PATH}")
+
+# Ask for the sign label
+sign_label = input("Enter sign label (example: HELLO): ").strip().upper()
+
+if not sign_label:
+    raise ValueError("Sign label cannot be empty.")
+
+print("\nSignCadence data collection started.")
+print("Press S to save a hand capture.")
+print("Press Q to quit.")
+
+# MediaPipe setup
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
 HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
-VisionRunningMode = mp.tasks.vision.RunningMode
-
-MODEL_PATH = "models/hand_landmarker.task"
+RunningMode = mp.tasks.vision.RunningMode
 
 options = HandLandmarkerOptions(
-    base_options=BaseOptions(model_asset_path=MODEL_PATH),
-    running_mode=VisionRunningMode.VIDEO,
+    base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
+    running_mode=RunningMode.VIDEO,
     num_hands=2
 )
 
-# Prepare CSV file
-file_exists = OUTPUT_FILE.exists()
+# Open CSV file
+file_exists = CSV_FILE.exists()
 
-with open(OUTPUT_FILE, "a", newline="") as csvfile:
-    writer = csv.writer(csvfile)
+with open(CSV_FILE, "a", newline="", encoding="utf-8") as file:
+
+    writer = csv.writer(file)
 
     if not file_exists:
         writer.writerow([
             "capture_id",
+            "sign_label",
+            "capture_time",
             "timestamp_ms",
             "hand_index",
             "handedness",
@@ -40,45 +63,51 @@ with open(OUTPUT_FILE, "a", newline="") as csvfile:
             "z"
         ])
 
-    with HandLandmarker.create_from_options(options) as detector:
+    # Start camera and detector
+    with HandLandmarker.create_from_options(options) as landmarker:
 
         camera = cv2.VideoCapture(0)
-        timestamp = 0
-        capture_id = 0
 
         if not camera.isOpened():
-            print("Could not access camera.")
-            exit()
+            raise RuntimeError("Could not open webcam.")
 
-        print("SignCadence landmark collection is running!")
-        print("Press S to save hand coordinates.")
-        print("Press Q to quit.")
+        capture_count = 0
 
         while True:
+
             success, frame = camera.read()
 
             if not success:
+                print("Could not read camera frame.")
                 break
 
-            rgb_frame = cv2.cvtColor(
-                frame, cv2.COLOR_BGR2RGB
-            )
+            frame = cv2.flip(frame, 1)
+
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             mp_image = mp.Image(
                 image_format=mp.ImageFormat.SRGB,
                 data=rgb_frame
             )
 
-            timestamp += 33
-
-            result = detector.detect_for_video(
-                mp_image, timestamp
+            timestamp_ms = int(
+                datetime.now().timestamp() * 1000
             )
 
-            height, width, _ = frame.shape
+            result = landmarker.detect_for_video(
+                mp_image,
+                timestamp_ms
+            )
 
-            for hand_landmarks in result.hand_landmarks:
-                for landmark in hand_landmarks:
+            detected_hands = result.hand_landmarks
+
+            # Draw detected landmarks
+            for hand in detected_hands:
+
+                for landmark in hand:
+
+                    height, width, _ = frame.shape
+
                     x = int(landmark.x * width)
                     y = int(landmark.y * height)
 
@@ -90,37 +119,69 @@ with open(OUTPUT_FILE, "a", newline="") as csvfile:
                         -1
                     )
 
-            cv2.imshow(
-                "SignCadence - Landmark Collection",
-                frame
+            cv2.putText(
+                frame,
+                f"Sign: {sign_label}",
+                (20, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 255),
+                2
             )
+
+            cv2.putText(
+                frame,
+                f"Captures: {capture_count}",
+                (20, 70),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2
+            )
+
+            cv2.putText(
+                frame,
+                "S = Save | Q = Quit",
+                (20, 105),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2
+            )
+
+            cv2.imshow("SignCadence - Data Collection", frame)
 
             key = cv2.waitKey(1) & 0xFF
 
-            # Press S to save the current hand coordinates
+            # Save capture
             if key == ord("s"):
 
-                for hand_index, hand_landmarks in enumerate(
-                    result.hand_landmarks
-                ):
+                if not detected_hands:
+                    print("No hand detected. Capture not saved.")
+                    continue
+
+                capture_id = str(uuid.uuid4())
+                capture_time = datetime.now().isoformat()
+
+                for hand_index, hand in enumerate(detected_hands):
 
                     handedness = "Unknown"
 
                     if (
-                        hand_index < len(result.handedness)
-                        and result.handedness[hand_index]
+                        result.handedness
+                        and hand_index < len(result.handedness)
                     ):
                         handedness = (
                             result.handedness[hand_index][0].category_name
                         )
 
-                    for landmark_index, landmark in enumerate(
-                        hand_landmarks
-                    ):
+                    for landmark_index, landmark in enumerate(hand):
 
                         writer.writerow([
                             capture_id,
-                            timestamp,
+                            sign_label,
+                            capture_time,
+                            timestamp_ms,
                             hand_index,
                             handedness,
                             landmark_index,
@@ -129,18 +190,21 @@ with open(OUTPUT_FILE, "a", newline="") as csvfile:
                             landmark.z
                         ])
 
-                csvfile.flush()
-                capture_id += 1
+                file.flush()
+
+                capture_count += 1
 
                 print(
-                    f"Saved capture {capture_id} "
-                    f"to {OUTPUT_FILE}"
+                    f"Saved capture {capture_count} "
+                    f"for sign {sign_label}"
                 )
 
-            if key == ord("q"):
+            # Exit
+            elif key == ord("q"):
                 break
 
         camera.release()
         cv2.destroyAllWindows()
 
-print("Landmark collection completed!")
+print("\nSignCadence data collection finished.")
+print(f"Saved data to: {CSV_FILE}")
