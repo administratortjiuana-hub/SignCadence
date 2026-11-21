@@ -3,48 +3,131 @@ import cv2
 import mediapipe as mp
 import csv
 import uuid
+import time
 from pathlib import Path
 from datetime import datetime
-import time
 
 # ---------------------------------
-# SIGNCADENCE - HAND DATA COLLECTION
+# SIGNCADENCE CONFIGURATION
 # ---------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 MODEL_PATH = PROJECT_ROOT / "models" / "hand_landmarker.task"
+
 DATASET_FOLDER = PROJECT_ROOT / "dataset" / "landmarks"
 CSV_FILE = DATASET_FOLDER / "signcadence_landmarks.csv"
 
+VOCABULARY_FILE = (
+    PROJECT_ROOT / "dataset" / "signcadence_nsl_provisional_vocabulary.csv"
+)
+
 DATASET_FOLDER.mkdir(parents=True, exist_ok=True)
 
-if not MODEL_PATH.exists():
-    raise FileNotFoundError(f"MediaPipe model not found: {MODEL_PATH}")
+
+# ---------------------------------
+# LOAD VOCABULARY
+# ---------------------------------
+
+def load_vocabulary():
+    if not VOCABULARY_FILE.exists():
+        raise FileNotFoundError(
+            f"Vocabulary file not found: {VOCABULARY_FILE}"
+        )
+
+    with VOCABULARY_FILE.open(
+        "r", newline="", encoding="utf-8-sig"
+    ) as file:
+        reader = csv.DictReader(file)
+
+        required = [
+            "concept_id",
+            "english_concept",
+            "community_verification_status",
+        ]
+
+        if not all(column in (reader.fieldnames or []) for column in required):
+            raise ValueError("Vocabulary CSV is missing required columns.")
+
+        vocabulary = list(reader)
+
+    if not vocabulary:
+        raise ValueError("Vocabulary file contains no concepts.")
+
+    return vocabulary
+
+
+vocabulary = load_vocabulary()
+
+print("\nSIGNCADENCE - VOCABULARY SELECTION")
+print("=" * 45)
+
+for number, item in enumerate(vocabulary, start=1):
+    print(
+        f"{number}. {item['english_concept']} "
+        f"({item['concept_id']})"
+    )
+    print(
+        f"   Status: {item['community_verification_status']}"
+    )
+
+print("=" * 45)
+
+choice = input("\nEnter the number of the concept to select: ").strip()
+
+if not choice.isdigit() or not 1 <= int(choice) <= len(vocabulary):
+    raise ValueError("Invalid vocabulary selection.")
+
+selected = vocabulary[int(choice) - 1]
+
+concept_id = selected["concept_id"].strip()
+concept_name = selected["english_concept"].strip()
+
+sign_label = "_".join(concept_name.upper().split())
+
+verification_status = (
+    selected["community_verification_status"].strip().upper()
+)
+
+print("\nSelected concept:", concept_name)
+print("Concept ID:", concept_id)
+print("Verification:", verification_status)
+
 
 # ---------------------------------
 # SIGNER INFORMATION
 # ---------------------------------
 
 signer_id = input(
-    "Enter anonymous signer ID (example: TEST_SIGNER_002): "
+    "\nEnter anonymous signer ID: "
 ).strip().upper()
 
 if not signer_id:
     raise ValueError("Signer ID cannot be empty.")
 
-sign_label = input(
-    "Enter sign label (example: HELLO): "
-).strip().upper()
 
-if not sign_label:
-    raise ValueError("Sign label cannot be empty.")
+# ---------------------------------
+# VERIFICATION SAFEGUARD
+# ---------------------------------
 
-print("\nSignCadence data collection started.")
-print("Signer:", signer_id)
-print("Sign:", sign_label)
-print("Click the camera window before using the keyboard.")
-print("Press S to save a hand capture.")
-print("Press Q to quit.")
+if not verification_status.startswith("VERIFIED"):
+    print("\nCOLLECTION NOT AUTHORISED.")
+    print("This concept has not been verified by a fluent NSL signer.")
+    print("No training data has been saved.")
+    print("\nPlease obtain community verification before collecting")
+    print("official NSL training examples.")
+    raise SystemExit(0)
+
+
+# ---------------------------------
+# CHECK MEDIAPIPE MODEL
+# ---------------------------------
+
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(
+        f"MediaPipe model not found: {MODEL_PATH}"
+    )
+
 
 # ---------------------------------
 # MEDIAPIPE SETUP
@@ -60,8 +143,9 @@ options = HandLandmarkerOptions(
         model_asset_path=str(MODEL_PATH)
     ),
     running_mode=RunningMode.VIDEO,
-    num_hands=2
+    num_hands=2,
 )
+
 
 # ---------------------------------
 # CSV SETUP
@@ -74,7 +158,7 @@ with open(
     CSV_FILE,
     "a",
     newline="",
-    encoding="utf-8"
+    encoding="utf-8",
 ) as file:
 
     writer = csv.writer(file)
@@ -91,12 +175,13 @@ with open(
             "x",
             "y",
             "z",
-            "signer_id"
+            "signer_id",
         ])
 
-    # ---------------------------------
-    # START HAND DETECTOR
-    # ---------------------------------
+    print("\nSignCadence collection started.")
+    print("Sign:", sign_label)
+    print("Signer:", signer_id)
+    print("Press S to save. Press Q to quit.")
 
     with HandLandmarker.create_from_options(options) as landmarker:
 
@@ -121,12 +206,12 @@ with open(
 
                 rgb_frame = cv2.cvtColor(
                     frame,
-                    cv2.COLOR_BGR2RGB
+                    cv2.COLOR_BGR2RGB,
                 )
 
                 mp_image = mp.Image(
                     image_format=mp.ImageFormat.SRGB,
-                    data=rgb_frame
+                    data=rgb_frame,
                 )
 
                 timestamp_ms = int(
@@ -135,14 +220,13 @@ with open(
 
                 result = landmarker.detect_for_video(
                     mp_image,
-                    timestamp_ms
+                    timestamp_ms,
                 )
 
                 detected_hands = result.hand_landmarks
 
                 height, width, _ = frame.shape
 
-                # Draw hand landmarks
                 for hand in detected_hands:
                     for landmark in hand:
                         x = int(landmark.x * width)
@@ -153,15 +237,14 @@ with open(
                             (x, y),
                             5,
                             (0, 255, 0),
-                            -1
+                            -1,
                         )
 
-                # Display information
                 display_lines = [
                     (f"Sign: {sign_label}", 35),
                     (f"Signer: {signer_id}", 70),
                     (f"Captures: {capture_count}", 105),
-                    ("S = Save | Q = Quit", 140)
+                    ("S = Save | Q = Quit", 140),
                 ]
 
                 for message, y_position in display_lines:
@@ -172,10 +255,9 @@ with open(
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.6,
                         (255, 255, 255),
-                        2
+                        2,
                     )
 
-                # Display save feedback
                 if time.monotonic() < status_until:
                     cv2.putText(
                         frame,
@@ -184,30 +266,21 @@ with open(
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.7,
                         (0, 255, 0),
-                        2
+                        2,
                     )
 
                 cv2.imshow(
                     "SignCadence - Data Collection",
-                    frame
+                    frame,
                 )
 
-                # Read keyboard input
                 key = cv2.waitKey(1) & 0xFF
 
-                if key != 255:
-                    print("Keyboard input received:", key)
-
-                # Make keyboard input case-insensitive
                 key_char = (
                     chr(key).lower()
                     if 0 <= key <= 127
                     else ""
                 )
-
-                # ---------------------------------
-                # SAVE CAPTURE
-                # ---------------------------------
 
                 if key_char == "s":
 
@@ -245,25 +318,19 @@ with open(
                                 landmark.x,
                                 landmark.y,
                                 landmark.z,
-                                signer_id
+                                signer_id,
                             ])
 
                     file.flush()
-
                     capture_count += 1
 
                     status_message = "CAPTURE SAVED!"
                     status_until = time.monotonic() + 3
 
                     print(
-                        f"SUCCESS! Saved capture {capture_count} "
-                        f"for sign {sign_label} "
-                        f"by signer {signer_id}"
+                        f"Saved capture {capture_count}: "
+                        f"{sign_label} ({signer_id})"
                     )
-
-                # ---------------------------------
-                # QUIT
-                # ---------------------------------
 
                 elif key_char == "q":
                     print("Stopping SignCadence...")
@@ -273,5 +340,6 @@ with open(
             camera.release()
             cv2.destroyAllWindows()
 
-print("\nSignCadence data collection finished.")
-print(f"Saved data to: {CSV_FILE}")
+
+print("\nSignCadence collection finished.")
+print("Saved data to:", CSV_FILE)
