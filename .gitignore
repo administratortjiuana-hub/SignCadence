@@ -6,3 +6,4 @@ dataset/processed_videos/
 dataset/landmarks/
 dataset/processed/
 .venv312/
+.student-test/
