@@ -143,7 +143,7 @@ options = HandLandmarkerOptions(
         model_asset_path=str(MODEL_PATH)
     ),
     running_mode=RunningMode.VIDEO,
-    num_hands=2,
+    num_hands=1,
 )
 
 
