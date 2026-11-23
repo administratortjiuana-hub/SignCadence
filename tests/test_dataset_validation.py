@@ -36,25 +36,41 @@ class TestDatasetValidation(unittest.TestCase):
                     "z": 0.3,
                 })
 
+    def get_output(self, dataset_file):
+        with patch.object(
+            validate_dataset, "DATASET_FILE", dataset_file
+        ):
+            with patch("builtins.print") as mock_print:
+                validate_dataset.validate_dataset()
+
+        return " ".join(
+            " ".join(map(str, call.args))
+            for call in mock_print.call_args_list
+        )
+
+    def modify_first_row(self, dataset_file, changes):
+        with open(dataset_file, "r", newline="") as file:
+            reader = csv.DictReader(file)
+            columns = reader.fieldnames
+            rows = list(reader)
+
+        rows[0].update(changes)
+
+        with open(dataset_file, "w", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+
     def test_valid_capture_passes(self):
         with tempfile.TemporaryDirectory() as folder:
             dataset_file = Path(folder) / "test.csv"
             self.create_valid_dataset(dataset_file)
 
-            with patch.object(
-                validate_dataset, "DATASET_FILE", dataset_file
-            ):
-                with patch("builtins.print") as mock_print:
-                    validate_dataset.validate_dataset()
+            output = self.get_output(dataset_file)
 
-            printed_text = " ".join(
-                " ".join(map(str, call.args))
-                for call in mock_print.call_args_list
-            )
-
-            self.assertIn("Quality errors: 0", printed_text)
+            self.assertIn("Quality errors: 0", output)
             self.assertIn(
-                "DATASET STRUCTURE LOOKS GOOD", printed_text
+                "DATASET STRUCTURE LOOKS GOOD", output
             )
 
     def test_incomplete_capture_is_detected(self):
@@ -72,18 +88,50 @@ class TestDatasetValidation(unittest.TestCase):
                 writer.writeheader()
                 writer.writerows(rows[:-1])
 
-            with patch.object(
-                validate_dataset, "DATASET_FILE", dataset_file
-            ):
-                with patch("builtins.print") as mock_print:
-                    validate_dataset.validate_dataset()
+            output = self.get_output(dataset_file)
 
-            printed_text = " ".join(
-                " ".join(map(str, call.args))
-                for call in mock_print.call_args_list
+            self.assertIn(
+                "Incomplete or duplicate landmarks", output
             )
 
-            self.assertIn("Incomplete or duplicate landmarks", printed_text)
+    def test_invalid_landmark_index_is_detected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dataset_file = Path(folder) / "test.csv"
+            self.create_valid_dataset(dataset_file)
+
+            self.modify_first_row(
+                dataset_file, {"landmark_index": "25"}
+            )
+
+            output = self.get_output(dataset_file)
+
+            self.assertIn("Invalid landmark index 25", output)
+
+    def test_non_numeric_coordinate_is_detected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dataset_file = Path(folder) / "test.csv"
+            self.create_valid_dataset(dataset_file)
+
+            self.modify_first_row(
+                dataset_file, {"x": "not_a_number"}
+            )
+
+            output = self.get_output(dataset_file)
+
+            self.assertIn("Invalid landmark data.", output)
+
+    def test_infinite_coordinate_is_detected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dataset_file = Path(folder) / "test.csv"
+            self.create_valid_dataset(dataset_file)
+
+            self.modify_first_row(
+                dataset_file, {"x": "inf"}
+            )
+
+            output = self.get_output(dataset_file)
+
+            self.assertIn("Invalid x coordinate.", output)
 
 
 if __name__ == "__main__":
