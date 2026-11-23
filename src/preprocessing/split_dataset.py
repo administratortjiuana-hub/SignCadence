@@ -15,16 +15,18 @@ INPUT_FILE = (
 OUTPUT_FOLDER = PROJECT_ROOT / "dataset" / "splits"
 
 
-def split_dataset():
+def split_dataset(input_file=INPUT_FILE):
+
+    input_file = Path(input_file)
 
     print("\nSIGNCADENCE DATASET SPLITTING")
     print("=" * 45)
 
-    if not INPUT_FILE.exists():
+    if not input_file.exists():
         print("ERROR: Processed dataset not found.")
         return
 
-    with open(INPUT_FILE, "r", newline="") as file:
+    with open(input_file, "r", newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
         fieldnames = reader.fieldnames or []
         rows = list(reader)
@@ -33,27 +35,12 @@ def split_dataset():
         print("ERROR: Dataset is empty.")
         return
 
-    if "signer_id" not in fieldnames:
+    required_columns = {"signer_id", "sign_label", "capture_id"}
+
+    if not required_columns.issubset(fieldnames):
         print("SPLITTING STOPPED.")
-        print("The dataset has no signer_id column.")
-        print("We must identify each consenting signer")
-        print("before creating signer-independent splits.")
-        return
-
-    if "sign_label" not in fieldnames:
-        print("ERROR: sign_label column is missing.")
-        return
-
-    signers = {
-        row["signer_id"].strip()
-        for row in rows
-        if row["signer_id"].strip()
-    }
-
-    if len(signers) < 3:
-        print("SPLITTING STOPPED.")
-        print("At least three distinct signers are needed")
-        print("for basic train, validation and test groups.")
+        print("Required columns are missing:",
+              required_columns - set(fieldnames))
         return
 
     if any(not row["signer_id"].strip() for row in rows):
@@ -61,17 +48,41 @@ def split_dataset():
         print("Some captures have missing signer IDs.")
         return
 
+    if any(not row["sign_label"].strip() for row in rows):
+        print("SPLITTING STOPPED.")
+        print("Some captures have missing sign labels.")
+        return
+
+    signers = {
+        row["signer_id"].strip()
+        for row in rows
+    }
+
+    labels = Counter(
+        row["sign_label"].strip()
+        for row in rows
+    )
+
+    print("Total captures:", len(rows))
     print("Distinct signers:", len(signers))
-    print("Captures:", len(rows))
-    print("Labels:", dict(Counter(
-        row["sign_label"] for row in rows
-    )))
+    print("Signers:", sorted(signers))
+    print("Labels:", dict(labels))
 
-    print("\nThe dataset has passed basic signer checks.")
-    print("A carefully designed, class-aware split")
-    print("must be planned before files are created.")
+    print("\nSIGNER-INDEPENDENT SPLIT CHECK")
+    print("-" * 45)
 
-    print("\nNo files have been split or modified.")
+    if len(signers) < 3:
+        print("STATUS: NOT READY")
+        print("At least three distinct signers are needed")
+        print("for basic train, validation and test groups.")
+        print("Current signers:", len(signers))
+        print("Additional signers needed:", 3 - len(signers))
+        print("\nNo files have been created or modified.")
+        return
+
+    print("STATUS: BASIC SIGNER CHECK PASSED")
+    print("A class-aware split must still be designed.")
+    print("No files have been created or modified.")
     print("=" * 45)
 
 
