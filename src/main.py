@@ -1,11 +1,13 @@
 
-import cv2
-import mediapipe as mp
 import csv
 import uuid
 import time
 from pathlib import Path
 from datetime import datetime
+
+import cv2
+import mediapipe as mp
+
 
 # ---------------------------------
 # SIGNCADENCE CONFIGURATION
@@ -19,8 +21,26 @@ DATASET_FOLDER = PROJECT_ROOT / "dataset" / "landmarks"
 CSV_FILE = DATASET_FOLDER / "signcadence_landmarks.csv"
 
 VOCABULARY_FILE = (
-    PROJECT_ROOT / "dataset" / "signcadence_nsl_provisional_vocabulary.csv"
+    PROJECT_ROOT
+    / "dataset"
+    / "signcadence_nsl_provisional_vocabulary.csv"
 )
+
+EXPECTED_LANDMARKS = 21
+
+CSV_COLUMNS = [
+    "capture_id",
+    "sign_label",
+    "capture_time",
+    "timestamp_ms",
+    "hand_index",
+    "handedness",
+    "landmark_index",
+    "x",
+    "y",
+    "z",
+    "signer_id",
+]
 
 DATASET_FOLDER.mkdir(parents=True, exist_ok=True)
 
@@ -30,14 +50,18 @@ DATASET_FOLDER.mkdir(parents=True, exist_ok=True)
 # ---------------------------------
 
 def load_vocabulary():
+
     if not VOCABULARY_FILE.exists():
         raise FileNotFoundError(
             f"Vocabulary file not found: {VOCABULARY_FILE}"
         )
 
     with VOCABULARY_FILE.open(
-        "r", newline="", encoding="utf-8-sig"
+        "r",
+        newline="",
+        encoding="utf-8-sig",
     ) as file:
+
         reader = csv.DictReader(file)
 
         required = [
@@ -46,16 +70,27 @@ def load_vocabulary():
             "community_verification_status",
         ]
 
-        if not all(column in (reader.fieldnames or []) for column in required):
-            raise ValueError("Vocabulary CSV is missing required columns.")
+        if not all(
+            column in (reader.fieldnames or [])
+            for column in required
+        ):
+            raise ValueError(
+                "Vocabulary CSV is missing required columns."
+            )
 
         vocabulary = list(reader)
 
     if not vocabulary:
-        raise ValueError("Vocabulary file contains no concepts.")
+        raise ValueError(
+            "Vocabulary file contains no concepts."
+        )
 
     return vocabulary
 
+
+# ---------------------------------
+# VOCABULARY SELECTION
+# ---------------------------------
 
 vocabulary = load_vocabulary()
 
@@ -63,17 +98,21 @@ print("\nSIGNCADENCE - VOCABULARY SELECTION")
 print("=" * 45)
 
 for number, item in enumerate(vocabulary, start=1):
+
     print(
         f"{number}. {item['english_concept']} "
         f"({item['concept_id']})"
     )
+
     print(
         f"   Status: {item['community_verification_status']}"
     )
 
 print("=" * 45)
 
-choice = input("\nEnter the number of the concept to select: ").strip()
+choice = input(
+    "\nEnter the number of the concept to select: "
+).strip()
 
 if not choice.isdigit() or not 1 <= int(choice) <= len(vocabulary):
     raise ValueError("Invalid vocabulary selection.")
@@ -95,6 +134,22 @@ print("Verification:", verification_status)
 
 
 # ---------------------------------
+# VERIFICATION SAFEGUARD
+# ---------------------------------
+
+if not verification_status.startswith("VERIFIED"):
+
+    print("\nCOLLECTION NOT AUTHORISED.")
+    print("This concept has not been verified by a fluent NSL signer.")
+    print("No training data has been saved.")
+
+    print("\nPlease obtain community verification before collecting")
+    print("official NSL training examples.")
+
+    raise SystemExit(0)
+
+
+# ---------------------------------
 # SIGNER INFORMATION
 # ---------------------------------
 
@@ -107,26 +162,37 @@ if not signer_id:
 
 
 # ---------------------------------
-# VERIFICATION SAFEGUARD
-# ---------------------------------
-
-if not verification_status.startswith("VERIFIED"):
-    print("\nCOLLECTION NOT AUTHORISED.")
-    print("This concept has not been verified by a fluent NSL signer.")
-    print("No training data has been saved.")
-    print("\nPlease obtain community verification before collecting")
-    print("official NSL training examples.")
-    raise SystemExit(0)
-
-
-# ---------------------------------
 # CHECK MEDIAPIPE MODEL
 # ---------------------------------
 
 if not MODEL_PATH.exists():
+
     raise FileNotFoundError(
         f"MediaPipe model not found: {MODEL_PATH}"
     )
+
+
+# ---------------------------------
+# CSV SAFETY CHECK
+# ---------------------------------
+
+if CSV_FILE.exists() and CSV_FILE.stat().st_size > 0:
+
+    with CSV_FILE.open(
+        "r",
+        newline="",
+        encoding="utf-8-sig",
+    ) as existing_file:
+
+        reader = csv.reader(existing_file)
+        existing_columns = next(reader, [])
+
+    if existing_columns != CSV_COLUMNS:
+
+        raise ValueError(
+            "Existing landmark CSV columns do not match "
+            "the expected format. No data was added."
+        )
 
 
 # ---------------------------------
@@ -134,8 +200,13 @@ if not MODEL_PATH.exists():
 # ---------------------------------
 
 BaseOptions = mp.tasks.BaseOptions
+
 HandLandmarker = mp.tasks.vision.HandLandmarker
-HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+
+HandLandmarkerOptions = (
+    mp.tasks.vision.HandLandmarkerOptions
+)
+
 RunningMode = mp.tasks.vision.RunningMode
 
 options = HandLandmarkerOptions(
@@ -148,14 +219,13 @@ options = HandLandmarkerOptions(
 
 
 # ---------------------------------
-# CSV SETUP
+# CAMERA AND CSV COLLECTION
 # ---------------------------------
 
 file_exists = CSV_FILE.exists()
 capture_count = 0
 
-with open(
-    CSV_FILE,
+with CSV_FILE.open(
     "a",
     newline="",
     encoding="utf-8",
@@ -164,23 +234,14 @@ with open(
     writer = csv.writer(file)
 
     if not file_exists or CSV_FILE.stat().st_size == 0:
-        writer.writerow([
-            "capture_id",
-            "sign_label",
-            "capture_time",
-            "timestamp_ms",
-            "hand_index",
-            "handedness",
-            "landmark_index",
-            "x",
-            "y",
-            "z",
-            "signer_id",
-        ])
+        writer.writerow(CSV_COLUMNS)
+        file.flush()
 
     print("\nSignCadence collection started.")
     print("Sign:", sign_label)
     print("Signer:", signer_id)
+    print("One hand required.")
+    print("Exactly 21 landmarks required.")
     print("Press S to save. Press Q to quit.")
 
     with HandLandmarker.create_from_options(options) as landmarker:
@@ -188,12 +249,16 @@ with open(
         camera = cv2.VideoCapture(0)
 
         if not camera.isOpened():
+            camera.release()
             raise RuntimeError("Could not open webcam.")
 
         status_message = "Waiting for hand..."
         status_until = 0
 
+        last_timestamp_ms = 0
+
         try:
+
             while True:
 
                 success, frame = camera.read()
@@ -214,9 +279,12 @@ with open(
                     data=rgb_frame,
                 )
 
-                timestamp_ms = int(
-                    datetime.now().timestamp() * 1000
+                timestamp_ms = max(
+                    time.monotonic_ns() // 1_000_000,
+                    last_timestamp_ms + 1,
                 )
+
+                last_timestamp_ms = timestamp_ms
 
                 result = landmarker.detect_for_video(
                     mp_image,
@@ -227,8 +295,12 @@ with open(
 
                 height, width, _ = frame.shape
 
+                # Draw detected landmarks.
+
                 for hand in detected_hands:
+
                     for landmark in hand:
+
                         x = int(landmark.x * width)
                         y = int(landmark.y * height)
 
@@ -240,6 +312,8 @@ with open(
                             -1,
                         )
 
+                # Display information.
+
                 display_lines = [
                     (f"Sign: {sign_label}", 35),
                     (f"Signer: {signer_id}", 70),
@@ -248,6 +322,7 @@ with open(
                 ]
 
                 for message, y_position in display_lines:
+
                     cv2.putText(
                         frame,
                         message,
@@ -259,6 +334,7 @@ with open(
                     )
 
                 if time.monotonic() < status_until:
+
                     cv2.putText(
                         frame,
                         status_message,
@@ -282,49 +358,100 @@ with open(
                     else ""
                 )
 
+                # ---------------------------------
+                # SAVE CAPTURE
+                # ---------------------------------
+
                 if key_char == "s":
 
-                    if not detected_hands:
-                        status_message = "No hand detected!"
+                    if len(detected_hands) != 1:
+
+                        status_message = (
+                            "Exactly one hand required!"
+                        )
+
                         status_until = time.monotonic() + 3
-                        print("No hand detected. Capture not saved.")
+
+                        print(
+                            "Capture rejected. "
+                            "Exactly one hand is required."
+                        )
+
+                        continue
+
+                    hand = detected_hands[0]
+
+                    if len(hand) != EXPECTED_LANDMARKS:
+
+                        status_message = (
+                            "Invalid landmark count!"
+                        )
+
+                        status_until = time.monotonic() + 3
+
+                        print(
+                            "Capture rejected. "
+                            "Expected exactly 21 landmarks."
+                        )
+
                         continue
 
                     capture_id = str(uuid.uuid4())
+
                     capture_time = datetime.now().isoformat()
 
-                    for hand_index, hand in enumerate(detected_hands):
+                    handedness = "Unknown"
 
-                        handedness = "Unknown"
+                    if (
+                        result.handedness
+                        and len(result.handedness) > 0
+                    ):
 
-                        if (
-                            result.handedness
-                            and hand_index < len(result.handedness)
-                        ):
-                            handedness = (
-                                result.handedness[hand_index][0].category_name
-                            )
+                        handedness = (
+                            result.handedness[0][0].category_name
+                        )
 
-                        for landmark_index, landmark in enumerate(hand):
+                    # Prepare all rows before writing.
 
-                            writer.writerow([
-                                capture_id,
-                                sign_label,
-                                capture_time,
-                                timestamp_ms,
-                                hand_index,
-                                handedness,
-                                landmark_index,
-                                landmark.x,
-                                landmark.y,
-                                landmark.z,
-                                signer_id,
-                            ])
+                    capture_rows = []
+
+                    for landmark_index, landmark in enumerate(hand):
+
+                        capture_rows.append([
+                            capture_id,
+                            sign_label,
+                            capture_time,
+                            timestamp_ms,
+                            0,
+                            handedness,
+                            landmark_index,
+                            landmark.x,
+                            landmark.y,
+                            landmark.z,
+                            signer_id,
+                        ])
+
+                    # Final safety check.
+
+                    if len(capture_rows) != EXPECTED_LANDMARKS:
+
+                        print(
+                            "Capture rejected. "
+                            "Incomplete landmark data."
+                        )
+
+                        continue
+
+                    # Save the complete capture together.
+
+                    writer.writerows(capture_rows)
 
                     file.flush()
+
                     capture_count += 1
 
                     status_message = "CAPTURE SAVED!"
+
                     status_until = time.monotonic() + 3
 
                     print(
@@ -332,14 +459,27 @@ with open(
                         f"{sign_label} ({signer_id})"
                     )
 
+                # ---------------------------------
+                # QUIT
+                # ---------------------------------
+
                 elif key_char == "q":
+
                     print("Stopping SignCadence...")
                     break
 
         finally:
+
             camera.release()
             cv2.destroyAllWindows()
 
 
+# ---------------------------------
+# COLLECTION COMPLETE
+# ---------------------------------
+
 print("\nSignCadence collection finished.")
+
+print("New captures saved:", capture_count)
+
 print("Saved data to:", CSV_FILE)
