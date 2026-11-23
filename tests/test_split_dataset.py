@@ -24,6 +24,15 @@ class TestSplitDataset(unittest.TestCase):
                     "signer_id": signer_id,
                 })
 
+    def get_output(self, dataset_file):
+        with patch("builtins.print") as mock_print:
+            split_dataset(dataset_file)
+
+        return " ".join(
+            " ".join(map(str, call.args))
+            for call in mock_print.call_args_list
+        )
+
     def test_fewer_than_three_signers_is_not_ready(self):
         with tempfile.TemporaryDirectory() as folder:
             dataset_file = Path(folder) / "input.csv"
@@ -32,16 +41,10 @@ class TestSplitDataset(unittest.TestCase):
                 ["SIGNER_001", "SIGNER_001", "SIGNER_002"]
             )
 
-            with patch("builtins.print") as mock_print:
-                split_dataset(dataset_file)
+            output = self.get_output(dataset_file)
 
-            printed_text = " ".join(
-                " ".join(map(str, call.args))
-                for call in mock_print.call_args_list
-            )
-
-            self.assertIn("STATUS: NOT READY", printed_text)
-            self.assertIn("Additional signers needed: 1", printed_text)
+            self.assertIn("STATUS: NOT READY", output)
+            self.assertIn("Additional signers needed: 1", output)
 
     def test_three_signers_pass_basic_check(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -51,17 +54,11 @@ class TestSplitDataset(unittest.TestCase):
                 ["SIGNER_001", "SIGNER_002", "SIGNER_003"]
             )
 
-            with patch("builtins.print") as mock_print:
-                split_dataset(dataset_file)
-
-            printed_text = " ".join(
-                " ".join(map(str, call.args))
-                for call in mock_print.call_args_list
-            )
+            output = self.get_output(dataset_file)
 
             self.assertIn(
                 "STATUS: BASIC SIGNER CHECK PASSED",
-                printed_text
+                output
             )
 
     def test_missing_signer_id_stops_check(self):
@@ -72,18 +69,36 @@ class TestSplitDataset(unittest.TestCase):
                 ["SIGNER_001", "", "SIGNER_003"]
             )
 
-            with patch("builtins.print") as mock_print:
-                split_dataset(dataset_file)
-
-            printed_text = " ".join(
-                " ".join(map(str, call.args))
-                for call in mock_print.call_args_list
-            )
+            output = self.get_output(dataset_file)
 
             self.assertIn(
                 "Some captures have missing signer IDs.",
-                printed_text
+                output
             )
+
+    def test_empty_dataset_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dataset_file = Path(folder) / "input.csv"
+
+            with open(dataset_file, "w", encoding="utf-8") as file:
+                file.write("capture_id,sign_label,signer_id\n")
+
+            output = self.get_output(dataset_file)
+
+            self.assertIn("ERROR: Dataset is empty.", output)
+
+    def test_missing_required_column_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dataset_file = Path(folder) / "input.csv"
+
+            with open(dataset_file, "w", encoding="utf-8") as file:
+                file.write("capture_id,sign_label\n")
+                file.write("CAPTURE_001,HELLO\n")
+
+            output = self.get_output(dataset_file)
+
+            self.assertIn("SPLITTING STOPPED.", output)
+            self.assertIn("Required columns are missing:", output)
 
 
 if __name__ == "__main__":
